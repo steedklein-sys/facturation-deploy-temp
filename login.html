@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#17323c">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<title>Connexion — Facturation STEED</title>
+<style>
+  :root { font-family: 'Inter', system-ui, -apple-system, sans-serif; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(175deg,#1a3942 0%,#15303a 55%,#122a33 100%);
+    padding: 20px;
+  }
+  form {
+    background: #fff; border-radius: 12px; padding: 32px 28px; width: 100%; max-width: 360px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.35);
+    display: flex; flex-direction: column; gap: 16px;
+  }
+  img.logo { width: 150px; align-self: center; margin-bottom: 4px; }
+  h1 {
+    margin: 0; font-size: 15px; text-align: center; color: #5d7c85;
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+  }
+  label { font-size: 13px; color: #46626b; font-weight: 600; display: flex; flex-direction: column; gap: 6px; }
+  input {
+    font-size: 16px; padding: 12px 14px; border-radius: 8px; border: 1px solid #cfd9dc; width: 100%;
+    font-family: inherit;
+  }
+  input:focus { outline: 2px solid #0c6c84; outline-offset: 1px; }
+  button {
+    font-family: 'Barlow Condensed', sans-serif; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    font-size: 15px; padding: 13px; border-radius: 8px; border: 0; background: #fca80c; color: #17323c; cursor: pointer;
+  }
+  button:active { background: #cc8508; }
+  button:disabled { opacity: .6; cursor: default; }
+  .err { color: #a7311a; font-size: 13px; margin: 0; min-height: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<form id="f" autocomplete="on">
+  <img class="logo" alt="STEED Solutions Extérieures" src="icon.png">
+  <h1>Facturation — accès privé</h1>
+  <label>Mot de passe
+    <input type="password" name="password" id="password" autocomplete="current-password" autofocus required>
+  </label>
+  <p class="err" id="err"></p>
+  <button type="submit" id="btn">Se connecter</button>
+</form>
+<script>
+(function () {
+  var f = document.getElementById('f');
+  var err = document.getElementById('err');
+  var btn = document.getElementById('btn');
+  var params = new URLSearchParams(location.search);
+  var next = params.get('next');
+  if (next && !/^\/[^\/]/.test(next)) next = null; // n'autorise qu'un chemin relatif local
+
+  f.addEventListener('submit', function (e) {
+    e.preventDefault();
+    err.textContent = '';
+    btn.disabled = true;
+    btn.textContent = 'Connexion…';
+    fetch('api/login.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ password: document.getElementById('password').value })
+    }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
+      .then(function (res) {
+        if (res.status === 200 && res.body && res.body.ok) {
+          location.href = next || 'index.html';
+        } else {
+          err.textContent = (res.body && res.body.error) || 'Connexion impossible';
+          btn.disabled = false;
+          btn.textContent = 'Se connecter';
+        }
+      })
+      .catch(function () {
+        err.textContent = 'Connexion impossible — vérifiez votre connexion internet';
+        btn.disabled = false;
+        btn.textContent = 'Se connecter';
+      });
+  });
+})();
+</script>
+</body>
+</html>
