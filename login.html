@@ -16,7 +16,7 @@
     background: linear-gradient(175deg,#1a3942 0%,#15303a 55%,#122a33 100%);
     padding: 20px;
   }
-  form {
+  form, .panel {
     background: #fff; border-radius: 12px; padding: 32px 28px; width: 100%; max-width: 360px;
     box-shadow: 0 20px 60px rgba(0,0,0,.35);
     display: flex; flex-direction: column; gap: 16px;
@@ -38,27 +38,198 @@
   }
   button:active { background: #cc8508; }
   button:disabled { opacity: .6; cursor: default; }
+  button.secondaire { background: #eef3f4; color: #17323c; }
+  button.secondaire:active { background: #dde6e8; }
+  button.lien { background: none; color: #0c6c84; text-decoration: underline; padding: 6px; font-weight: 600; text-transform: none; letter-spacing: normal; font-family: inherit; font-size: 13px; }
   .err { color: #a7311a; font-size: 13px; margin: 0; min-height: 16px; text-align: center; }
+  .ou { display: flex; align-items: center; gap: 10px; color: #9ab0b6; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  .ou::before, .ou::after { content: ''; flex: 1; height: 1px; background: #e2e9eb; }
+  .panel p { margin: 0; font-size: 13px; color: #46626b; line-height: 1.5; text-align: center; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
 <form id="f" autocomplete="on">
   <img class="logo" alt="STEED Solutions Extérieures" src="icon.png">
   <h1>Facturation — accès privé</h1>
+
+  <button type="button" id="btnEmpreinte" class="secondaire hidden">🔒 Utiliser l'empreinte digitale / Face ID</button>
+  <p class="ou hidden" id="ouDivider">ou</p>
+
   <label>Mot de passe
     <input type="password" name="password" id="password" autocomplete="current-password" autofocus required>
   </label>
   <p class="err" id="err"></p>
   <button type="submit" id="btn">Se connecter</button>
 </form>
+
+<div class="panel hidden" id="panelActiver">
+  <img class="logo" alt="STEED Solutions Extérieures" src="icon.png">
+  <h1>Connexion réussie</h1>
+  <p>Voulez-vous activer le déverrouillage par empreinte digitale / Face ID sur cet appareil ? La prochaine fois, vous n'aurez plus besoin de taper le mot de passe ici.</p>
+  <p class="err" id="errActiver"></p>
+  <button type="button" id="btnActiverOui">Activer sur cet appareil</button>
+  <button type="button" id="btnActiverNon" class="secondaire">Plus tard</button>
+</div>
+
 <script>
 (function () {
   var f = document.getElementById('f');
   var err = document.getElementById('err');
   var btn = document.getElementById('btn');
+  var btnEmpreinte = document.getElementById('btnEmpreinte');
+  var ouDivider = document.getElementById('ouDivider');
+  var panelActiver = document.getElementById('panelActiver');
+  var errActiver = document.getElementById('errActiver');
+  var btnActiverOui = document.getElementById('btnActiverOui');
+  var btnActiverNon = document.getElementById('btnActiverNon');
+
   var params = new URLSearchParams(location.search);
   var next = params.get('next');
   if (next && !/^\/[^\/]/.test(next)) next = null; // n'autorise qu'un chemin relatif local
+
+  function allerPlusLoin() {
+    location.href = next || 'index.html';
+  }
+
+  // --- conversions base64url <-> ArrayBuffer, nécessaires pour l'API WebAuthn ---
+  function b64uToBuf(b64u) {
+    var b64 = b64u.replace(/-/g, '+').replace(/_/g, '/');
+    var pad = b64.length % 4;
+    if (pad) b64 += '='.repeat(4 - pad);
+    var bin = atob(b64);
+    var buf = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    return buf.buffer;
+  }
+  function bufToB64u(buf) {
+    var bin = '';
+    var bytes = new Uint8Array(buf);
+    for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+    return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  }
+
+  var waSupporte = !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+
+  // --- Bouton "Se connecter avec l'empreinte digitale" (page de connexion) ---
+  function proposerConnexionEmpreinte() {
+    if (!waSupporte) return;
+    Promise.all([
+      PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable(),
+      fetch('api/webauthn-has.php', { credentials: 'same-origin' }).then(function (r) { return r.json(); }).catch(function () { return { available: false }; })
+    ]).then(function (res) {
+      if (res[0] && res[1] && res[1].available) {
+        btnEmpreinte.classList.remove('hidden');
+        ouDivider.classList.remove('hidden');
+      }
+    }).catch(function () {});
+  }
+  proposerConnexionEmpreinte();
+
+  btnEmpreinte.addEventListener('click', function () {
+    err.textContent = '';
+    btnEmpreinte.disabled = true;
+    fetch('api/webauthn-login-options.php', { credentials: 'same-origin' })
+      .then(function (r) {
+        if (!r.ok) throw new Error('indisponible');
+        return r.json();
+      })
+      .then(function (opts) {
+        opts.challenge = b64uToBuf(opts.challenge);
+        opts.allowCredentials = (opts.allowCredentials || []).map(function (c) {
+          return Object.assign({}, c, { id: b64uToBuf(c.id) });
+        });
+        return navigator.credentials.get({ publicKey: opts });
+      })
+      .then(function (cred) {
+        var body = {
+          id: bufToB64u(cred.rawId),
+          clientDataJSON: bufToB64u(cred.response.clientDataJSON),
+          authenticatorData: bufToB64u(cred.response.authenticatorData),
+          signature: bufToB64u(cred.response.signature)
+        };
+        return fetch('api/webauthn-login-verify.php', {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
+      })
+      .then(function (res) {
+        if (res.status === 200 && res.body && res.body.ok) {
+          allerPlusLoin();
+        } else {
+          err.textContent = 'Empreinte non reconnue — utilisez votre mot de passe.';
+          btnEmpreinte.disabled = false;
+        }
+      })
+      .catch(function () {
+        err.textContent = 'Empreinte annulée ou indisponible — utilisez votre mot de passe.';
+        btnEmpreinte.disabled = false;
+      });
+  });
+
+  // --- Après une connexion par mot de passe réussie : proposer d'activer l'empreinte ---
+  function proposerActivation() {
+    var dejaDemande = false;
+    try { dejaDemande = localStorage.getItem('wa_demande') === '1'; } catch (e) {}
+
+    if (!waSupporte || dejaDemande) {
+      allerPlusLoin();
+      return;
+    }
+    PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable().then(function (dispo) {
+      if (!dispo) { allerPlusLoin(); return; }
+      f.classList.add('hidden');
+      panelActiver.classList.remove('hidden');
+    }).catch(function () { allerPlusLoin(); });
+  }
+
+  function marquerDemande() {
+    try { localStorage.setItem('wa_demande', '1'); } catch (e) {}
+  }
+
+  btnActiverNon.addEventListener('click', function () {
+    marquerDemande();
+    allerPlusLoin();
+  });
+
+  btnActiverOui.addEventListener('click', function () {
+    errActiver.textContent = '';
+    btnActiverOui.disabled = true;
+    btnActiverNon.disabled = true;
+    fetch('api/webauthn-register-options.php', { method: 'POST', credentials: 'same-origin' })
+      .then(function (r) { return r.json(); })
+      .then(function (opts) {
+        opts.challenge = b64uToBuf(opts.challenge);
+        opts.user.id = b64uToBuf(opts.user.id);
+        return navigator.credentials.create({ publicKey: opts });
+      })
+      .then(function (cred) {
+        var body = {
+          clientDataJSON: bufToB64u(cred.response.clientDataJSON),
+          attestationObject: bufToB64u(cred.response.attestationObject),
+          label: (navigator.userAgentData && navigator.userAgentData.platform) || navigator.platform || 'Appareil'
+        };
+        return fetch('api/webauthn-register-verify.php', {
+          method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
+      })
+      .then(function (res) {
+        marquerDemande();
+        if (res.status === 200 && res.body && res.body.ok) {
+          allerPlusLoin();
+        } else {
+          errActiver.textContent = (res.body && res.body.error) || "Impossible d'activer l'empreinte digitale.";
+          btnActiverOui.disabled = false;
+          btnActiverNon.disabled = false;
+        }
+      })
+      .catch(function () {
+        errActiver.textContent = 'Activation annulée.';
+        btnActiverOui.disabled = false;
+        btnActiverNon.disabled = false;
+      });
+  });
 
   f.addEventListener('submit', function (e) {
     e.preventDefault();
@@ -73,7 +244,7 @@
     }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
       .then(function (res) {
         if (res.status === 200 && res.body && res.body.ok) {
-          location.href = next || 'index.html';
+          proposerActivation();
         } else {
           err.textContent = (res.body && res.body.error) || 'Connexion impossible';
           btn.disabled = false;

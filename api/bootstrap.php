@@ -34,6 +34,53 @@ function ensure_schema(mysqli $db): void
             last_used_at DATETIME NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4'
     );
+    $db->query(
+        "CREATE TABLE IF NOT EXISTS webauthn_credentials (
+            credential_id VARBINARY(255) NOT NULL PRIMARY KEY,
+            public_key_pem TEXT NOT NULL,
+            sign_count BIGINT UNSIGNED NOT NULL DEFAULT 0,
+            label VARCHAR(100) NOT NULL DEFAULT '',
+            created_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+    );
+}
+
+// Crée une session (jeton + cookie 'authtok') — utilisé après une connexion
+// réussie, que ce soit par mot de passe ou par empreinte digitale (WebAuthn).
+function create_session(mysqli $db): void
+{
+    $token = bin2hex(random_bytes(32));
+    $hash = hash('sha256', $token);
+    $stmt = $db->prepare('INSERT INTO auth_tokens (token_hash, created_at, last_used_at) VALUES (?, NOW(), NOW())');
+    $stmt->bind_param('s', $hash);
+    $stmt->execute();
+
+    $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+    setcookie('authtok', $token, [
+        'expires' => time() + 60 * 60 * 24 * 365,
+        'path' => '/',
+        'secure' => $secure,
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ]);
+}
+
+// Démarre une session PHP (utilisée brièvement pour mémoriser le "challenge"
+// WebAuthn entre les deux requêtes d'une même opération) avec des réglages
+// de cookie cohérents avec le reste de l'application.
+function wa_session_start(): void
+{
+    if (session_status() !== PHP_SESSION_ACTIVE) {
+        $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
+        session_set_cookie_params([
+            'lifetime' => 0,
+            'path' => '/',
+            'secure' => $secure,
+            'httponly' => true,
+            'samesite' => 'Lax',
+        ]);
+        session_start();
+    }
 }
 
 function current_token(): ?string
